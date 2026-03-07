@@ -1,7 +1,5 @@
-package bedolaga
+package my.shiny.app
 
-object App {
-  def main(args: Array[String]): Unit = {
-    println("Hello, World!")
-  }
+object MyApp extends App {
+  println("Hello, World!")
 }

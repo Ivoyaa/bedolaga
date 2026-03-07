@@ -2,7 +2,8 @@ package bedolaga
 
 import com.typesafe.config.{Config, ConfigFactory}
 
-final case class ProjectStructure(name: String, mainClass: String, directory: String, fileToCompile: String)
+final case class ProjectStructure(name: String, mainClass: String,
+                                  directory: String, fileToCompile: String)
 
 object ProjectStructure {
   def parse(path: String)(config: Config): ProjectStructure = {
