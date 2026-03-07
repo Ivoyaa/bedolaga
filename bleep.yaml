@@ -1,0 +1,25 @@
+$schema: https://raw.githubusercontent.com/oyvindberg/bleep/master/schema.json
+$version: 1.0.0-M3
+jvm:
+  name: temurin-jre:1.17.0.18
+projects:
+  bedolaga-mvp:
+    dependencies:
+      - com.lihaoyi::fansi:0.5.0
+      - com.typesafe:config:1.4.4
+    extends: template-common
+    platform:
+      mainClass: bedolaga.Build
+  bedolaga-mvp-tests:
+    dependencies: org.scalatest::scalatest:3.2.19
+    dependsOn: bedolaga-mvp
+    extends: template-common
+    isTestProject: true
+templates:
+  template-common:
+    platform:
+      name: jvm
+    scala:
+      options: -encoding utf8 -feature -unchecked
+      strict: true
+      version: 2.13.18
