@@ -1,5 +1,7 @@
 package my.shiny.app
 
 object MyApp extends App {
-  println("Hello, World!")
+  val hw = HelloWorld("hello", "world")
+
+  println(hw)
 }
