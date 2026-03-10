@@ -6,7 +6,7 @@ projects:
   bedolaga-mvp:
     dependencies:
       - com.typesafe:config:1.4.4
-      - org.scala-lang:scala-compiler:2.13.8
+#      - org.scala-lang:scala-compiler:2.13.8
       - io.get-coursier::coursier:2.1.24
       - io.get-coursier::coursier-jvm:2.1.24
       - io.get-coursier::coursier-sbt-maven-repository:2.1.24
