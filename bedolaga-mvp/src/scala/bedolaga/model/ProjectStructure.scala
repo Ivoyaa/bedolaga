@@ -1,9 +1,13 @@
-package bedolaga
+package bedolaga.model
 
-import com.typesafe.config.{Config, ConfigFactory}
+import com.typesafe.config.Config
 
-final case class ProjectStructure(name: String, mainClass: String,
-                                  directory: String, fileToCompile: String)
+final case class ProjectStructure(
+    name: String,
+    mainClass: String,
+    directory: String,
+    scalaVersion: String
+)
 
 object ProjectStructure {
   def parse(path: String)(config: Config): ProjectStructure = {
@@ -13,7 +17,7 @@ object ProjectStructure {
       name = conf.getString("name"),
       mainClass = conf.getString("main-class"),
       directory = conf.getString("directory"),
-      fileToCompile = conf.getString("file-to-compile")
+      scalaVersion = conf.getString("scala-version")
     )
   }
 }
