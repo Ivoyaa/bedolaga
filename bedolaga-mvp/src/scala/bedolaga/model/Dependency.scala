@@ -1,10 +1,7 @@
 package bedolaga.model
 
-import bedolaga.Build.project
-import coursier.{Dependency => CoursierDependency, Module, ModuleName, Organization}
-import coursier.core.{Configuration, DependencyManagement, MinimizedExclusions, Publication}
-import coursier.{Dependency, Fetch, Module, ModuleName, Organization}
 import coursier.core.{Configuration, Publication}
+import coursier.{Module, ModuleName, Organization, Dependency => CoursierDependency}
 
 final case class Dependency (org: String, module: String, version: String) {
   def asCoursierDependency = new CoursierDependency(
@@ -18,6 +15,6 @@ final case class Dependency (org: String, module: String, version: String) {
     minimizedExclusions = Set.empty[(Organization, ModuleName)],
     publication = Publication.empty,
     optional = false,
-    transitive = false
+    transitive = true
   )
 }
