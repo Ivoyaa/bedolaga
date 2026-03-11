@@ -2,7 +2,7 @@ package bedolaga
 
 import bedolaga.model._
 import com.typesafe.config.ConfigFactory
-import coursier.Fetch
+import coursier.{Fetch, Resolve}
 
 import scala.sys.process._
 import java.io.{File, FileFilter}
@@ -43,13 +43,20 @@ object Build extends App {
   val filesToCompile =
     getFilesRecurrently(projectDirectoryFile).filter(_.getPath.contains(".scala")).map(_.getPath)
 
+  val dependencies = Fetch()
+    .addDependencies(project.dependencies.map(_.asCoursierDependency): _*)
+    .withClasspathOrder(true)
+    .run()
+
+  println(s"DEPENDENCIES: $dependencies")
+
   val command =
     s"""java -classpath
-       |".:${compilerJars.mkString(":")}"
+       |".:${compilerJars.mkString(":")}:${dependencies.mkString(":")}"
        |scala.tools.nsc.Main
        |-usejavacp
        |-d example/compiled
-       |${filesToCompile.mkString(" ")}""".stripMargin.replaceAll("\n"," ")
+       |${filesToCompile.mkString(" ")}""".stripMargin.replaceAll("\n", " ")
 
   println(s"COMMAND: $command")
   val _ = command.!!
@@ -66,30 +73,3 @@ object Build extends App {
   }
 
 }
-
-/*
-Start programmatically.
-
-  import scala.tools.nsc._
-  import java.net.URLClassLoader
-
-  val settings = new Settings()
-  settings.usejavacp.value = true
-  settings.outputDirs.setSingleOutput(outputTarget.getPath)
-  settings.verbose.value = true
-
-  val global = new Global(settings)
-
-  val run = new global.Run
-
-  val classLoader = new URLClassLoader(files.map(_.toURI.toURL).toArray) // find jar from artifacts, but we can just point it as direct dependency in bleep
-  val global = classLoader
-    .loadClass("scala.tools.nsc.Global")
-    .getDeclaredConstructor(classOf[Settings])
-    .newInstance(settings)
-    .asInstanceOf[Global]
-  val run = new global.Run
-
-
-  run.compile(filesToCompile.filter(_.getPath.contains(".scala")).map(_.getPath))
- */
