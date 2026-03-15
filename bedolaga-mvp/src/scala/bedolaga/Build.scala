@@ -5,7 +5,9 @@ import com.typesafe.config.ConfigFactory
 import coursier.{Fetch, Resolve}
 
 import scala.sys.process._
-import java.io.{File, FileFilter}
+import java.io.{ByteArrayOutputStream, File, FileFilter}
+import java.nio.file.{Files, StandardOpenOption}
+import java.util.jar.{Attributes, JarEntry, JarOutputStream}
 
 object Build extends App {
   val project = ProjectStructure.parse("build-structure")(
@@ -60,6 +62,46 @@ object Build extends App {
 
   println(s"COMMAND: $command")
   val _ = command.!!
+
+  val filesToPackage =
+    getFilesRecurrently(outputTarget).filter(_.getPath.contains(".class"))
+
+  println(s"PACKAGE: ${filesToPackage.map(_.getPath)}")
+
+  val manifest = {
+    val mfst = new java.util.jar.Manifest()
+    val attrs = mfst.getMainAttributes
+    attrs.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0")
+    attrs.put(Attributes.Name.IMPLEMENTATION_TITLE, project.name)
+    attrs.put(Attributes.Name.MAIN_CLASS, project.mainClass)
+    mfst
+  }
+
+  val stream = new ByteArrayOutputStream(1024 * 1024)
+  val streamJar = new JarOutputStream(stream, manifest)
+
+  val jar = filesToPackage.foldLeft(streamJar) { case (jar, file) =>
+    val entry = new JarEntry(file.getPath)
+    jar.putNextEntry(entry)
+    jar.write(Files.readAllBytes(file.toPath))
+    jar.closeEntry()
+    jar
+  }
+
+  jar.close()
+
+  val jarBytes = stream.toByteArray
+
+  val packageTarget = new File(s"${project.directory}/packaged")
+
+  packageTarget.mkdirs()
+
+  Files.write(
+    new File(s"${packageTarget.getPath}/${project.name}.jar").toPath,
+    jarBytes,
+    StandardOpenOption.CREATE,
+    StandardOpenOption.TRUNCATE_EXISTING
+  )
 
   def getFilesRecurrently(fileOrDirectory: File): List[File] = {
     if (fileOrDirectory.isFile) List(fileOrDirectory)
