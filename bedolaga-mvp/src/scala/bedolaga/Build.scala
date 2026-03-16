@@ -81,7 +81,8 @@ object Build extends App {
   val streamJar = new JarOutputStream(stream, manifest)
 
   val jar = filesToPackage.foldLeft(streamJar) { case (jar, file) =>
-    val entry = new JarEntry(file.getPath)
+    val shortPath = file.getPath.replaceAll("example/compiled/", "")
+    val entry = new JarEntry(shortPath)
     jar.putNextEntry(entry)
     jar.write(Files.readAllBytes(file.toPath))
     jar.closeEntry()
@@ -102,6 +103,17 @@ object Build extends App {
     StandardOpenOption.CREATE,
     StandardOpenOption.TRUNCATE_EXISTING
   )
+
+  val runCommand =
+    s"""java -classpath
+       |".:${dependencies.mkString(":")}:${packageTarget.getAbsolutePath}/${project.name}.jar"
+       |${project.mainClass}""".stripMargin.replaceAll("\n", " ")
+
+  println(s"RUN COMMAND: $runCommand")
+
+  val result = runCommand.!!
+
+  println(result)
 
   def getFilesRecurrently(fileOrDirectory: File): List[File] = {
     if (fileOrDirectory.isFile) List(fileOrDirectory)
