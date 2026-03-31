@@ -9,7 +9,8 @@ final case class ProjectStructure(
     mainClass: String,
     directory: String,
     scalaVersion: String,
-    dependencies: List[Dependency]
+    dependencies: List[Dependency],
+//    ancestors: List[String]
 )
 
 object ProjectStructure {
