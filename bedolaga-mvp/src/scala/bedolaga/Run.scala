@@ -7,16 +7,18 @@ import coursier.{Fetch => CsFetch}
 
 import scala.sys.process._
 import java.io.{ByteArrayOutputStream, File}
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util.jar.{Attributes, JarEntry, JarOutputStream}
+import scala.annotation.tailrec
 import scala.language.postfixOps
 
 object Run extends App {
-  val pr = ProjectStructure.parse("build-structure")(
-    ConfigFactory.parseFile(new File("example/setup.conf"))
-  )
+  interpret {
+    val pr = ProjectStructure.parse("build-structure")(
+      ConfigFactory.parseFile(new File("example/setup.conf"))
+    )
 
-  interpret(
     Build(
       state = new State(pr) {
         override def fetched: Option[Set[File]] = None
@@ -25,36 +27,62 @@ object Run extends App {
 
         override def packaged: Option[Path] = None
       },
-      executionPlan = Fetch :: ScalaCompile :: Package :: RunApp :: End :: Nil
+      executionPlan = Fetch(
+        dependencies = pr.dependencies,
+        fetchPath = Path.of(pr.directory, "fetched")
+      ) ::
+        ScalaCompile(
+          compilationTarget = Path.of(pr.directory),
+          compilationPath = Path.of(pr.directory, "compiled"),
+          fetchPath = Path.of(pr.directory, "fetched")
+        ) ::
+        Package(
+          artifactsCompiled = List(Path.of(pr.directory, "compiled")),
+          packagePath = Path.of(pr.directory, "packaged")
+        ) ::
+        RunApp(
+          artifactsFetched = List(Path.of(pr.directory, "fetched")),
+          artifactsPackaged = Path.of(pr.directory, "packaged"),
+          mainClass = pr.mainClass
+        ) :: Nil
     )
-  )
+  }
 
-  def interpret(build: Build): Build = build.executionPlan.head match {
-    case End =>
-      println(s"Bedolaga finished!")
-      Build(state = build.state, executionPlan = List.empty)
-    case Fetch =>
-      val deps = build.state.project.dependencies
+  @tailrec
+  def interpret(build: Build): Build = build.executionPlan match {
+    case Nil =>
+      println(s"EXECUTION FINISHED")
+      build
+
+    case Fetch(dependencies, fetchPath) :: tail =>
+      val deps = dependencies
       val fetchedFiles = CsFetch()
         .addDependencies(deps.map(_.asCoursierDependency): _*)
         .withClasspathOrder(true)
         .run()
 
-      println(s"DEPENDENCIES: $deps")
+      val _ = fetchPath.toFile.mkdirs()
 
-      interpret(Build(
-        state = new State(build.state.project) {
-          override def fetched: Option[Set[File]] =
-            Some(fetchedFiles.toSet ++ build.state.fetched.getOrElse(Set.empty))
+      val moved =
+        fetchedFiles.map(f => Files.move(f.toPath, fetchPath.resolve(f.getName), REPLACE_EXISTING))
 
-          override def compiled: Option[Set[File]] = build.state.compiled
+      println(s"DEPENDENCIES: $moved")
 
-          override def packaged: Option[Path] = build.state.packaged
-        },
-        executionPlan = build.executionPlan.tail
-      ))
+      interpret(
+        Build(
+          state = new State(build.state.project) {
+            override def fetched: Option[Set[File]] =
+              Some(fetchedFiles.toSet ++ build.state.fetched.getOrElse(Set.empty))
 
-    case ScalaCompile =>
+            override def compiled: Option[Set[File]] = build.state.compiled
+
+            override def packaged: Option[Path] = build.state.packaged
+          },
+          executionPlan = tail
+        )
+      )
+
+    case ScalaCompile(compilationTarget, compilationPath, fetchPath) :: tail =>
       val compilerDependency = Dependency(
         org = "org.scala-lang",
         module = "scala-compiler",
@@ -79,45 +107,53 @@ object Run extends App {
         .withClasspathOrder(true)
         .run()
 
-      val filesToCompile = getFilesRecurrently(build.state.projectDirectoryFile)
+      val filesToCompile = getFilesRecurrently(compilationTarget.toFile)
         .filter(_.getPath.contains(".scala"))
         .map(_.getPath)
+
+      val fetchedFiles =
+        getFilesRecurrently(fetchPath.toFile).filter(_.getPath.contains(".jar"))
 
       val command =
         s"""java -classpath
            |".:${compilerJars
-          .mkString(":")}:${build.state.fetched.getOrElse(Set.empty).mkString(":")}"
+          .mkString(":")}:${fetchedFiles.mkString(":")}"
            |scala.tools.nsc.Main
            |-usejavacp
            |-d example/compiled
            |${filesToCompile.mkString(" ")}""".stripMargin.replaceAll("\n", " ")
 
-      build.state.outputTarget.mkdirs()
+      val _ = compilationPath.toFile.mkdirs()
 
       println(s"COMMAND: $command")
       val _ = command.!!
 
       val compiledFiles =
-        getFilesRecurrently(build.state.outputTarget).filter(_.getPath.contains(".class"))
+        getFilesRecurrently(compilationPath.toFile).filter(_.getPath.contains(".class"))
 
-      interpret(Build(
-        state = new State(build.state.project) {
-          override def fetched: Option[Set[File]] =
-            Some(build.state.fetched.getOrElse(Set.empty))
+      interpret(
+        Build(
+          state = new State(build.state.project) {
+            override def fetched: Option[Set[File]] =
+              Some(build.state.fetched.getOrElse(Set.empty))
 
-          override def compiled: Option[Set[File]] =
-            Some(build.state.compiled.getOrElse(Set.empty) ++ compiledFiles)
+            override def compiled: Option[Set[File]] =
+              Some(build.state.compiled.getOrElse(Set.empty) ++ compiledFiles)
 
-          override def packaged: Option[Path] = build.state.packaged
-        },
-        executionPlan = build.executionPlan.tail
-      ))
+            override def packaged: Option[Path] = build.state.packaged
+          },
+          executionPlan = tail
+        )
+      )
 
-    case Package =>
-      val filesToPackage =
-        getFilesRecurrently(build.state.outputTarget).filter(_.getPath.contains(".class"))
+    case Package(artifactsCompiled, packagePath) :: tail =>
+      val filesToPackage = artifactsCompiled.flatMap(p =>
+        getFilesRecurrently(p.toFile)
+          .filter(_.getPath.contains(".class"))
+          .map(f => (f, f.getPath.replaceAll(s"${p.toFile.getPath}/", "")))
+      )
 
-      println(s"PACKAGE: ${filesToPackage.map(_.getPath)}")
+      println(s"PACKAGE: ${filesToPackage}")
 
       val manifest = {
         val mfst = new java.util.jar.Manifest()
@@ -130,8 +166,7 @@ object Run extends App {
 
       val stream = new ByteArrayOutputStream(1024 * 1024)
       val streamJar = new JarOutputStream(stream, manifest)
-      val jar = filesToPackage.foldLeft(streamJar) { case (jar, file) =>
-        val shortPath = file.getPath.replaceAll(s"${build.state.outputTarget.getPath}/", "")
+      val jar = filesToPackage.foldLeft(streamJar) { case (jar, (file, shortPath)) =>
         val entry = new JarEntry(shortPath)
         jar.putNextEntry(entry)
         jar.write(Files.readAllBytes(file.toPath))
@@ -143,54 +178,66 @@ object Run extends App {
 
       val jarBytes = stream.toByteArray
 
-      build.state.packageTarget.mkdirs()
+      val _ = packagePath.toFile.mkdirs()
 
-      val packagePath = Files.write(
+      val _ = Files.write(
         new File(
-          s"${build.state.packageTarget.getPath}/${build.state.project.name}.jar"
+          s"${packagePath}/${build.state.project.name}.jar"
         ).toPath,
         jarBytes,
         StandardOpenOption.CREATE,
         StandardOpenOption.TRUNCATE_EXISTING
       )
 
-      interpret(Build(
-        state = new State(build.state.project) {
-          override def fetched: Option[Set[File]] = build.state.fetched
+      interpret(
+        Build(
+          state = new State(build.state.project) {
+            override def fetched: Option[Set[File]] = build.state.fetched
 
-          override def compiled: Option[Set[File]] = build.state.compiled
+            override def compiled: Option[Set[File]] = build.state.compiled
 
-          override def packaged: Option[Path] = if (build.state.packaged.nonEmpty)
-            throw new RuntimeException("Non empty packaged for some reason!")
-          else Some(packagePath)
-        },
-        executionPlan = build.executionPlan.tail
-      ))
+            override def packaged: Option[Path] = if (build.state.packaged.nonEmpty)
+              throw new RuntimeException("Non empty packaged for some reason!")
+            else Some(packagePath)
+          },
+          executionPlan = tail
+        )
+      )
 
-    case RunApp =>
+    case RunApp(fetchPaths, artifactsPackaged, mainClass) :: tail =>
+      val packagedApp = getFilesRecurrently(artifactsPackaged.toFile)
+        .filter(_.getPath.contains(".jar"))
+        .head
+
+      val artifactsFetched = fetchPaths.flatMap(p =>
+        getFilesRecurrently(p.toFile)
+          .filter(_.getPath.contains(".jar"))
+      )
+
       val runCommand =
         s"""java -classpath
-           |".:${build.state.fetched
-          .getOrElse(Set.empty)
-          .mkString(":")}:${build.state.packaged.get.toAbsolutePath}"
-           |${build.state.project.mainClass}""".stripMargin.replaceAll("\n", " ")
+           |".:${artifactsFetched
+          .mkString(":")}:${packagedApp.getPath}"
+           |${mainClass}""".stripMargin.replaceAll("\n", " ")
 
       println(s"RUN COMMAND: $runCommand")
 
       val result = runCommand.!!
 
-      println(result)
+      println(Console.GREEN + result + Console.RESET)
 
-      interpret(Build(
-        state = new State(build.state.project) {
-          override def fetched: Option[Set[File]] = build.state.fetched
+      interpret(
+        Build(
+          state = new State(build.state.project) {
+            override def fetched: Option[Set[File]] = build.state.fetched
 
-          override def compiled: Option[Set[File]] = build.state.compiled
+            override def compiled: Option[Set[File]] = build.state.compiled
 
-          override def packaged: Option[Path] = build.state.packaged
-        },
-        executionPlan = build.executionPlan.tail
-      ))
+            override def packaged: Option[Path] = build.state.packaged
+          },
+          executionPlan = tail
+        )
+      )
   }
 
   private def getFilesRecurrently(fileOrDirectory: File): List[File] = {
