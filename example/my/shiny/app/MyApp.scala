@@ -9,4 +9,6 @@ object MyApp extends App {
   println(json)
 
   println(hw)
+
+//  throw new RuntimeException(s"EMAE FAILED")
 }

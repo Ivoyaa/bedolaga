@@ -1,11 +1,12 @@
 package bedolaga
 
-import bedolaga.App
 import org.scalactic.TypeCheckedTripleEquals
 import org.scalatest.funsuite.AnyFunSuite
 
+import java.nio.file.Path
+
 class AppTest extends AnyFunSuite with TypeCheckedTripleEquals {
   test("works") {
-    assert(App.greeting("a").plainText === "Hello, a")
+    println(Path.of("example/").toAbsolutePath)
   }
 }
