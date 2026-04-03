@@ -10,7 +10,6 @@ projects:
       - io.get-coursier::coursier:2.1.24
       - io.get-coursier::coursier-jvm:2.1.24
       - io.get-coursier::coursier-sbt-maven-repository:2.1.24
-      - org.typelevel::cats-core:2.13.0
     extends: template-common
     platform:
       mainClass: bedolaga.Run

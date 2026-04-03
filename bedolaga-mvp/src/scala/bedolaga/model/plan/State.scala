@@ -10,5 +10,5 @@ abstract class State(val project: ProjectStructure) {
 
   def compiled: Option[Set[File]]
 
-  def packaged: Option[Path]
+  def packaged: Option[Set[Path]]
 }
