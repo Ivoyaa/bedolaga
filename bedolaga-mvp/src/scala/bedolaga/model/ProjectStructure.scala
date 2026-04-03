@@ -1,15 +1,17 @@
 package bedolaga.model
 
+import bedolaga.model.structure.ProjectName
 import com.typesafe.config.Config
 
 import scala.jdk.CollectionConverters.IterableHasAsScala
 
 final case class ProjectStructure(
-    name: String,
+    name: ProjectName,
     mainClass: String,
     directory: String,
     scalaVersion: String,
-    dependencies: List[Dependency]
+    dependencies: List[Dependency],
+    prerequisites: List[ProjectName]
 )
 
 object ProjectStructure {
@@ -17,7 +19,7 @@ object ProjectStructure {
     val conf = config.getConfig(path)
 
     ProjectStructure(
-      name = conf.getString("name"),
+      name = ProjectName(conf.getString("name")),
       mainClass = conf.getString("main-class"),
       directory = conf.getString("directory"),
       scalaVersion = conf.getString("scala-version"),
@@ -27,6 +29,9 @@ object ProjectStructure {
           module = conf.getString("module"),
           version = conf.getString("version")
         )
+      },
+      prerequisites = conf.getStringList("prerequisites").asScala.toList.map { name =>
+        ProjectName(name)
       }
     )
   }
