@@ -1,6 +1,7 @@
 package bedolaga
 
 import bedolaga.model.plan._
+import bedolaga.model.structure.ProjectName
 import bedolaga.model.{Build, Dependency, ProjectStructure}
 import com.typesafe.config.ConfigFactory
 import coursier.{Fetch => CsFetch}
@@ -15,35 +16,61 @@ import scala.language.postfixOps
 
 object Run extends App {
   interpret {
-    val pr = ProjectStructure.parse("build-structure")(
+    val prApp = ProjectStructure.parse("build-structure")(
       ConfigFactory.parseFile(new File("example/setup.conf"))
     )
 
+    val prCore = ProjectStructure.parse("build-structure")(
+      ConfigFactory.parseFile(new File("example-core/setup.conf"))
+    )
+
     Build(
-      state = new State(pr) {
+      state = new State(prApp) {
         override def fetched: Option[Set[File]] = None
 
         override def compiled: Option[Set[File]] = None
 
-        override def packaged: Option[Path] = None
+        override def packaged: Option[Set[Path]] = None
       },
       executionPlan = Fetch(
-        dependencies = pr.dependencies,
-        fetchPath = Path.of(pr.directory, "fetched")
+        dependencies = prCore.dependencies,
+        fetchPath = Path.of(prCore.directory, "fetched")
       ) ::
         ScalaCompile(
-          compilationTarget = Path.of(pr.directory),
-          compilationPath = Path.of(pr.directory, "compiled"),
-          fetchPath = Path.of(pr.directory, "fetched")
+          compilationTarget = Path.of(prCore.directory),
+          compilationPath = Path.of(prCore.directory, "compiled"),
+          fetchPaths = List(Path.of(prCore.directory, "fetched"))
+        ) :: Package(
+        artifactsCompiled = List(Path.of(prCore.directory, "compiled")),
+        packagePath = Path.of(prCore.directory, "packaged"),
+        projectName = prCore.name
+      ) ::
+        Fetch(
+          dependencies = prApp.dependencies,
+          fetchPath = Path.of(prApp.directory, "fetched")
+        ) ::
+        ScalaCompile(
+          compilationTarget = Path.of(prApp.directory),
+          compilationPath = Path.of(prApp.directory, "compiled"),
+          fetchPaths = List(
+            Path.of(prApp.directory, "fetched"),
+            Path.of(prCore.directory, "fetched"),
+            Path.of(prCore.directory, "packaged")
+          )
         ) ::
         Package(
-          artifactsCompiled = List(Path.of(pr.directory, "compiled")),
-          packagePath = Path.of(pr.directory, "packaged")
+          artifactsCompiled = List(Path.of(prApp.directory, "compiled")),
+          packagePath = Path.of(prApp.directory, "packaged"),
+          projectName = prApp.name
         ) ::
         RunApp(
-          artifactsFetched = List(Path.of(pr.directory, "fetched")),
-          artifactsPackaged = Path.of(pr.directory, "packaged"),
-          mainClass = pr.mainClass
+          artifactsFetched = List(
+            Path.of(prApp.directory, "fetched"),
+            Path.of(prCore.directory, "fetched"),
+            Path.of(prCore.directory, "packaged")
+          ),
+          artifactsPackaged = Path.of(prApp.directory, "packaged"),
+          mainClass = prApp.mainClass
         ) :: Nil
     )
   }
@@ -76,13 +103,13 @@ object Run extends App {
 
             override def compiled: Option[Set[File]] = build.state.compiled
 
-            override def packaged: Option[Path] = build.state.packaged
+            override def packaged: Option[Set[Path]] = build.state.packaged
           },
           executionPlan = tail
         )
       )
 
-    case ScalaCompile(compilationTarget, compilationPath, fetchPath) :: tail =>
+    case ScalaCompile(compilationTarget, compilationPath, fetchPaths) :: tail =>
       val compilerDependency = Dependency(
         org = "org.scala-lang",
         module = "scala-compiler",
@@ -111,8 +138,9 @@ object Run extends App {
         .filter(_.getPath.contains(".scala"))
         .map(_.getPath)
 
+      println(s"FETCH PATHS: $fetchPaths")
       val fetchedFiles =
-        getFilesRecurrently(fetchPath.toFile).filter(_.getPath.contains(".jar"))
+        fetchPaths.flatMap(p => getFilesRecurrently(p.toFile).filter(_.getPath.contains(".jar")))
 
       val command =
         s"""java -classpath
@@ -120,12 +148,13 @@ object Run extends App {
           .mkString(":")}:${fetchedFiles.mkString(":")}"
            |scala.tools.nsc.Main
            |-usejavacp
-           |-d example/compiled
+           |-d $compilationPath
            |${filesToCompile.mkString(" ")}""".stripMargin.replaceAll("\n", " ")
 
       val _ = compilationPath.toFile.mkdirs()
 
       println(s"COMMAND: $command")
+
       val _ = command.!!
 
       val compiledFiles =
@@ -140,13 +169,13 @@ object Run extends App {
             override def compiled: Option[Set[File]] =
               Some(build.state.compiled.getOrElse(Set.empty) ++ compiledFiles)
 
-            override def packaged: Option[Path] = build.state.packaged
+            override def packaged: Option[Set[Path]] = build.state.packaged
           },
           executionPlan = tail
         )
       )
 
-    case Package(artifactsCompiled, packagePath) :: tail =>
+    case Package(artifactsCompiled, packagePath, projectName) :: tail =>
       val filesToPackage = artifactsCompiled.flatMap(p =>
         getFilesRecurrently(p.toFile)
           .filter(_.getPath.contains(".class"))
@@ -159,8 +188,8 @@ object Run extends App {
         val mfst = new java.util.jar.Manifest()
         val attrs = mfst.getMainAttributes
         attrs.put(java.util.jar.Attributes.Name.MANIFEST_VERSION, "1.0")
-        attrs.put(Attributes.Name.IMPLEMENTATION_TITLE, build.state.project.name)
-        attrs.put(Attributes.Name.MAIN_CLASS, build.state.project.mainClass)
+        attrs.put(Attributes.Name.IMPLEMENTATION_TITLE, projectName.name)
+        attrs.put(Attributes.Name.MAIN_CLASS, projectName.name)
         mfst
       }
 
@@ -182,7 +211,7 @@ object Run extends App {
 
       val _ = Files.write(
         new File(
-          s"${packagePath}/${build.state.project.name}.jar"
+          s"${packagePath}/${projectName.name}.jar"
         ).toPath,
         jarBytes,
         StandardOpenOption.CREATE,
@@ -196,9 +225,8 @@ object Run extends App {
 
             override def compiled: Option[Set[File]] = build.state.compiled
 
-            override def packaged: Option[Path] = if (build.state.packaged.nonEmpty)
-              throw new RuntimeException("Non empty packaged for some reason!")
-            else Some(packagePath)
+            override def packaged: Option[Set[Path]] =
+              Some(build.state.packaged.getOrElse(Set.empty) ++ Set(packagePath))
           },
           executionPlan = tail
         )
@@ -222,7 +250,13 @@ object Run extends App {
 
       println(s"RUN COMMAND: $runCommand")
 
-      val result = runCommand.!!
+      val logFile = new File(build.state.project.directory, "applog.txt")
+      val logger = new FileProcessLogger(logFile)
+
+      val result = runCommand.!(logger)
+
+      logger.flush()
+      logger.close()
 
       println(Console.GREEN + result + Console.RESET)
 
@@ -233,7 +267,7 @@ object Run extends App {
 
             override def compiled: Option[Set[File]] = build.state.compiled
 
-            override def packaged: Option[Path] = build.state.packaged
+            override def packaged: Option[Set[Path]] = build.state.packaged
           },
           executionPlan = tail
         )
