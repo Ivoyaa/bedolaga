@@ -1,4 +1,4 @@
-package bedolaga.model
+package bedolaga.structure.model
 
 import coursier.core.{Configuration, Publication}
 import coursier.{Module, ModuleName, Organization, Dependency => CoursierDependency}
