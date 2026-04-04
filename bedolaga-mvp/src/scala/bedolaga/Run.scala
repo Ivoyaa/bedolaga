@@ -1,8 +1,9 @@
 package bedolaga
 
-import bedolaga.model.plan._
-import bedolaga.model.structure.ProjectName
-import bedolaga.model.{Build, Dependency, ProjectStructure}
+import bedolaga.plan.PlanBuilder
+import bedolaga.plan.model._
+import bedolaga.structure._
+import bedolaga.structure.model.{Dependency, ProjectName}
 import com.typesafe.config.ConfigFactory
 import coursier.{Fetch => CsFetch}
 
@@ -15,61 +16,61 @@ import scala.annotation.tailrec
 import scala.language.postfixOps
 
 object Run extends App {
-  interpret {
-    val prApp = ProjectStructure.parse("build-structure")(
-      ConfigFactory.parseFile(new File("example/setup.conf"))
-    )
 
-    val prCore = ProjectStructure.parse("build-structure")(
-      ConfigFactory.parseFile(new File("example-core/setup.conf"))
-    )
+  interpret {
+    val buildStructure = BuildReader.read(new File("example/setup.conf"))
+
+    new PlanBuilder(buildStructure).build(Step.Compile(ProjectName("example-app")), ProjectName("example-app"))
+
+    val prCore = buildStructure.projects(ProjectName("example-core"))
+    val prApp = buildStructure.projects(ProjectName("example-app"))
 
     Build(
-      state = new State(prApp) {
+      state = new State(buildStructure) {
         override def fetched: Option[Set[File]] = None
 
         override def compiled: Option[Set[File]] = None
 
         override def packaged: Option[Set[Path]] = None
       },
-      executionPlan = Fetch(
+      executionPlan = Phase.Fetch(
         dependencies = prCore.dependencies,
-        fetchPath = Path.of(prCore.directory, "fetched")
+        fetchPath = prCore.fetchPath
       ) ::
-        ScalaCompile(
+        Phase.ScalaCompile(
           compilationTarget = Path.of(prCore.directory),
-          compilationPath = Path.of(prCore.directory, "compiled"),
-          fetchPaths = List(Path.of(prCore.directory, "fetched"))
-        ) :: Package(
-        artifactsCompiled = List(Path.of(prCore.directory, "compiled")),
-        packagePath = Path.of(prCore.directory, "packaged"),
-        projectName = prCore.name
-      ) ::
-        Fetch(
-          dependencies = prApp.dependencies,
-          fetchPath = Path.of(prApp.directory, "fetched")
+          compilationPath = prCore.compilationPath,
+          fetchPaths = Set(prCore.fetchPath)
+        ) :: Phase.Package(
+          artifactsCompiled = Set(prCore.compilationPath),
+          packagePath = prCore.packagePath,
+          projectName = prCore.name
         ) ::
-        ScalaCompile(
+        Phase.Fetch(
+          dependencies = prApp.dependencies,
+          fetchPath = prApp.fetchPath
+        ) ::
+        Phase.ScalaCompile(
           compilationTarget = Path.of(prApp.directory),
-          compilationPath = Path.of(prApp.directory, "compiled"),
-          fetchPaths = List(
-            Path.of(prApp.directory, "fetched"),
-            Path.of(prCore.directory, "fetched"),
-            Path.of(prCore.directory, "packaged")
+          compilationPath = prApp.compilationPath,
+          fetchPaths = Set(
+            prApp.fetchPath,
+            prCore.fetchPath,
+            prCore.packagePath
           )
         ) ::
-        Package(
-          artifactsCompiled = List(Path.of(prApp.directory, "compiled")),
-          packagePath = Path.of(prApp.directory, "packaged"),
+        Phase.Package(
+          artifactsCompiled = Set(prApp.compilationPath),
+          packagePath = prApp.packagePath,
           projectName = prApp.name
         ) ::
-        RunApp(
-          artifactsFetched = List(
-            Path.of(prApp.directory, "fetched"),
-            Path.of(prCore.directory, "fetched"),
-            Path.of(prCore.directory, "packaged")
+        Phase.RunApp(
+          artifactsFetched = Set(
+            prApp.fetchPath,
+            prCore.fetchPath,
+            prCore.packagePath
           ),
-          artifactsPackaged = Path.of(prApp.directory, "packaged"),
+          artifactsPackaged = prApp.packagePath,
           mainClass = prApp.mainClass
         ) :: Nil
     )
@@ -81,8 +82,8 @@ object Run extends App {
       println(s"EXECUTION FINISHED")
       build
 
-    case Fetch(dependencies, fetchPath) :: tail =>
-      val deps = dependencies
+    case Phase.Fetch(dependencies, fetchPath) :: tail =>
+      val deps = dependencies.toList
       val fetchedFiles = CsFetch()
         .addDependencies(deps.map(_.asCoursierDependency): _*)
         .withClasspathOrder(true)
@@ -97,7 +98,7 @@ object Run extends App {
 
       interpret(
         Build(
-          state = new State(build.state.project) {
+          state = new State(build.state.structure) {
             override def fetched: Option[Set[File]] =
               Some(fetchedFiles.toSet ++ build.state.fetched.getOrElse(Set.empty))
 
@@ -109,23 +110,23 @@ object Run extends App {
         )
       )
 
-    case ScalaCompile(compilationTarget, compilationPath, fetchPaths) :: tail =>
+    case Phase.ScalaCompile(compilationTarget, compilationPath, fetchPaths) :: tail =>
       val compilerDependency = Dependency(
         org = "org.scala-lang",
         module = "scala-compiler",
-        version = build.state.project.scalaVersion
+        version = build.state.structure.projects(ProjectName("example-app")).scalaVersion
       ).asCoursierDependency
 
       val libraryDependency = Dependency(
         org = "org.scala-lang",
         module = "scala-library",
-        version = build.state.project.scalaVersion
+        version = build.state.structure.projects(ProjectName("example-app")).scalaVersion
       ).asCoursierDependency
 
       val reflectDependency = Dependency(
         org = "org.scala-lang",
         module = "scala-reflect",
-        version = build.state.project.scalaVersion
+        version = build.state.structure.projects(ProjectName("example-app")).scalaVersion
       ).asCoursierDependency
 
       // TODO: вынести в кэш компиляторов
@@ -162,7 +163,7 @@ object Run extends App {
 
       interpret(
         Build(
-          state = new State(build.state.project) {
+          state = new State(build.state.structure) {
             override def fetched: Option[Set[File]] =
               Some(build.state.fetched.getOrElse(Set.empty))
 
@@ -175,7 +176,7 @@ object Run extends App {
         )
       )
 
-    case Package(artifactsCompiled, packagePath, projectName) :: tail =>
+    case Phase.Package(artifactsCompiled, packagePath, projectName) :: tail =>
       val filesToPackage = artifactsCompiled.flatMap(p =>
         getFilesRecurrently(p.toFile)
           .filter(_.getPath.contains(".class"))
@@ -220,7 +221,7 @@ object Run extends App {
 
       interpret(
         Build(
-          state = new State(build.state.project) {
+          state = new State(build.state.structure) {
             override def fetched: Option[Set[File]] = build.state.fetched
 
             override def compiled: Option[Set[File]] = build.state.compiled
@@ -232,7 +233,7 @@ object Run extends App {
         )
       )
 
-    case RunApp(fetchPaths, artifactsPackaged, mainClass) :: tail =>
+    case Phase.RunApp(fetchPaths, artifactsPackaged, mainClass) :: tail =>
       val packagedApp = getFilesRecurrently(artifactsPackaged.toFile)
         .filter(_.getPath.contains(".jar"))
         .head
@@ -250,7 +251,8 @@ object Run extends App {
 
       println(s"RUN COMMAND: $runCommand")
 
-      val logFile = new File(build.state.project.directory, "applog.txt")
+      val logFile =
+        new File(build.state.structure.projects(ProjectName("example-app")).directory, "applog.txt")
       val logger = new FileProcessLogger(logFile)
 
       val result = runCommand.!(logger)
@@ -262,7 +264,7 @@ object Run extends App {
 
       interpret(
         Build(
-          state = new State(build.state.project) {
+          state = new State(build.state.structure) {
             override def fetched: Option[Set[File]] = build.state.fetched
 
             override def compiled: Option[Set[File]] = build.state.compiled

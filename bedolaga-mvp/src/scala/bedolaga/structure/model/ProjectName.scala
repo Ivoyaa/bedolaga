@@ -1,3 +1,3 @@
-package bedolaga.model.structure
+package bedolaga.structure.model
 
 final case class ProjectName(name: String)
